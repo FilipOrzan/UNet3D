@@ -1,7 +1,8 @@
+Last version of code before improve the model
 from google.colab import drive
 drive.mount('/content/drive')
 
-
+#other cell
 # -*- coding: utf-8 -*-
 """
 Created on Mon Nov 25 19:25:39 2024
@@ -193,6 +194,7 @@ optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 # Training function
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
+
 print("Linia 146")
 for epoch in range(num_epochs):
     model.train()
@@ -218,68 +220,3 @@ for epoch in range(num_epochs):
 print("Training complete.")
 torch.save(model.state_dict(), 'trained_3d_unet.pth')
 print("Model saved as 'trained_3d_unet.pth'")
-
-
-# Load the saved model
-import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-import nibabel as nib
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
-import torch.nn.functional as F
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = UNet3D()
-model.load_state_dict(torch.load('/content/trained_3d_unet.pth', map_location=device,weights_only=True))
-model.to(device)
-model.eval()  # Set the model to evaluation mode
-
-# Define a dataset class for testing images
-class Nii3DDataset(Dataset):
-    def __init__(self, image_dir, transform=None):
-        self.image_dir = image_dir
-        self.transform = transform
-        self.images = [f for f in os.listdir(image_dir) if f.endswith('.gz')]
-
-    def __len__(self):
-        return len(self.images)
-
-    def __getitem__(self, idx):
-        image_path = os.path.join(self.image_dir, self.images[idx])
-        image = nib.load(image_path).get_fdata()
-
-        # Normalize the image
-        image = (image - np.min(image)) / (np.max(image) - np.min(image))
-
-        # Convert to tensor and add channel dimension
-        image = torch.tensor(image, dtype=torch.float32).unsqueeze(0)  # Shape: (1, D, H, W)
-        return image, self.images[idx]
-
-# Load test images
-test_image_dir = '/content/drive/MyDrive/Algoritmi_An_III/gztest/image/'  # Replace with your test image directory path
-test_dataset = Nii3DDataset(test_image_dir)
-test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
-
-# Run inference on test images
-print("Before test")
-for image, filename in test_loader:
-    image = image.to(device)
-    with torch.no_grad():
-        prediction = model(image).cpu().squeeze().numpy()
-
-    # Save and visualize results
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.title("Input Image")
-    plt.imshow(image.cpu().squeeze()[image.shape[2] // 2], cmap='gray')  # Mid-slice of input
-    plt.subplot(1, 2, 2)
-    plt.title("Predicted Mask")
-    plt.imshow(prediction[prediction.shape[0] // 2], cmap='gray')  # Mid-slice of prediction
-    plt.show()
-
-    # Save the prediction as a NIfTI file (optional)
-    output_nifti = nib.Nifti1Image(prediction, affine=np.eye(4))
-    nib.save(output_nifti, f'/content/predictions/{filename[0]}_prediction.nii.gz')
