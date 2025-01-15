@@ -64,15 +64,32 @@ class UNet3D_Optimized(nn.Module):
 
 # Dataset class for 3D NIfTI files
 class Nii3DDataset(Dataset):
-    def __init__(self, image_dir, mask_dir, crop_size=None, transform=None):
-        self.image_dir = image_dir
-        self.mask_dir = mask_dir
-        self.transform = transform
+    def __init__(self, root_dir, crop_size=None, transform=None):
+        """
+        Initialize the dataset by looking for image and mask files in the specified root directory.
+        Each subdirectory under root_dir is expected to contain an image file named
+        'flair_time01_on_middle_space.nii.gz' and a mask file named 'ground_truth.nii.gz'.
+
+        Args:
+            root_dir (str): Path to the root directory containing subdirectories with images and masks.
+            crop_size (tuple, optional): Dimensions (depth, height, width) to crop the data to.
+            transform (callable, optional): Optional transform to be applied on a sample.
+        """
+        self.root_dir = root_dir
         self.crop_size = crop_size
-        self.images = [f for f in os.scandir(image_dir) if f.is_file() and f.name.endswith('.gz')]
+        self.transform = transform
+        self.data = []
+
+        # Iterate through subdirectories and find valid image-mask pairs
+        for folder in os.scandir(root_dir):
+            if folder.is_dir():
+                image_path = os.path.join(folder.path, 'flair_time01_on_middle_space.nii.gz')
+                mask_path = os.path.join(folder.path, 'ground_truth.nii.gz')
+                if os.path.exists(image_path) and os.path.exists(mask_path):
+                    self.data.append((image_path, mask_path))
 
     def __len__(self):
-        return len(self.images)
+        return len(self.data)
 
     def crop_center(self, image, crop_size):
         depth, height, width = image.shape
@@ -85,8 +102,7 @@ class Nii3DDataset(Dataset):
         return image[start_d:start_d + crop_depth, start_h:start_h + crop_height, start_w:start_w + crop_width]
 
     def __getitem__(self, idx):
-        image_path = os.path.join(self.image_dir, self.images[idx])
-        mask_path = os.path.join(self.mask_dir, self.images[idx])
+        image_path, mask_path = self.data[idx]
 
         # Load NIfTI files
         image = nib.load(image_path).get_fdata()
@@ -106,22 +122,26 @@ class Nii3DDataset(Dataset):
         mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0)    # Shape: (1, D, H, W)
 
         return image, mask
-
-# Define paths
-image_dir = '/content/drive/MyDrive/Algoritmi_An_III/gztraining/image/'  # Replace with the path to your image NIfTI files
-mask_dir = '/content/drive/MyDrive/Algoritmi_An_III/gztraining/mask/'   # Replace with your 3D NIfTI mask directory
-print("Fișiere în image_dir:", os.listdir(image_dir))
-print("Fișiere în mask_dir:", os.listdir(mask_dir))
-
-# Hyperparameters
-batch_size = 1
+root_dir = '/content/drive/MyDrive/Algoritmi_An_III/gztraining/'  # Path to the root directory containing subdirectories
+crop_size = (128, 128, 128)  # Depth, Height, Width
 learning_rate = 0.1
 num_epochs = 1
-crop_size = (128, 128, 128)  # Depth, Height, Width
+print("Inainte de initializare")
+# Initialize the dataset
+dataset = Nii3DDataset(root_dir=root_dir, crop_size=crop_size)
+
+# Prepare DataLoader
+batch_size = 1
+dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+# Example: Iterate through the DataLoader
+for images, masks in dataloader:
+    print(f"Image shape: {images.shape}, Mask shape: {masks.shape}")
+
 
 # Initialize dataset with cropping
-dataset = Nii3DDataset(image_dir, mask_dir, crop_size=crop_size)
-
+#dataset = Nii3DDataset(image_dir, mask_dir, crop_size=crop_size)
+dataset = Nii3DDataset(root_dir='/content/drive/MyDrive/Algoritmi_An_III/gztraining/', crop_size=(128, 128, 128), transform=None)
 # Prepare DataLoader
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -159,6 +179,8 @@ for epoch in range(num_epochs):
 print("Training complete.")
 torch.save(model.state_dict(), 'trained_3d_unet_optimized.pth')
 print("Model saved as 'trained_3d_unet_optimized.pth'")
+
+
 
 # Load the saved model
 import os
