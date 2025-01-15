@@ -1,0 +1,266 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import nibabel as nib
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
+
+# Define optimized 3D U-Net model
+class UNet3D_Optimized(nn.Module):
+    def __init__(self):
+        super(UNet3D_Optimized, self).__init__()
+
+        def CBR(in_channels, out_channels):
+            return nn.Sequential(
+                nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True)
+            )
+
+        # Encoder with reduced filters
+        self.enc1 = CBR(1, 32)
+        self.enc2 = CBR(32, 64)
+        self.enc3 = CBR(64, 128)
+
+        # Decoder
+        self.dec1 = CBR(128 + 64, 64)
+        self.dec2 = CBR(64 + 32, 32)
+        self.final = nn.Conv3d(32, 1, kernel_size=1)
+
+        # Pooling and Upsampling
+        self.pool = nn.MaxPool3d(2)
+        self.up = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=True)
+
+    def forward(self, x):
+        # Encoder
+        enc1 = self.enc1(x)
+        enc2 = self.enc2(self.pool(enc1))
+        enc3 = self.enc3(self.pool(enc2))
+
+        # Decoder
+        dec1 = self.dec1(torch.cat([self.up(enc3), enc2], dim=1))
+        dec2 = self.dec2(torch.cat([self.up(dec1), enc1], dim=1))
+        final = self.final(dec2)
+
+        return torch.sigmoid(final)
+
+# Dataset class for 3D NIfTI files
+class Nii3DDataset(Dataset):
+    def __init__(self, root_dir, crop_size=None, transform=None):
+        """
+        Initialize the dataset by looking for image and mask files in the specified root directory.
+        Each subdirectory under root_dir is expected to contain an image file named
+        'flair_time01_on_middle_space.nii.gz' and a mask file named 'ground_truth.nii.gz'.
+
+        Args:
+            root_dir (str): Path to the root directory containing subdirectories with images and masks.
+            crop_size (tuple, optional): Dimensions (depth, height, width) to crop the data to.
+            transform (callable, optional): Optional transform to be applied on a sample.
+        """
+        self.root_dir = root_dir
+        self.crop_size = crop_size
+        self.transform = transform
+        self.data = []
+
+        # Iterate through subdirectories and find valid image-mask pairs
+        for folder in os.scandir(root_dir):
+            if folder.is_dir():
+                image_path = os.path.join(folder.path, 'flair_time01_on_middle_space.nii.gz')
+                mask_path = os.path.join(folder.path, 'ground_truth.nii.gz')
+                if os.path.exists(image_path) and os.path.exists(mask_path):
+                    self.data.append((image_path, mask_path))
+
+    def __len__(self):
+        return len(self.data)
+
+    def crop_center(self, image, crop_size):
+        depth, height, width = image.shape
+        crop_depth, crop_height, crop_width = crop_size
+
+        start_d = (depth - crop_depth) // 2
+        start_h = (height - crop_height) // 2
+        start_w = (width - crop_width) // 2
+
+        return image[start_d:start_d + crop_depth, start_h:start_h + crop_height, start_w:start_w + crop_width]
+
+    def __getitem__(self, idx):
+        image_path, mask_path = self.data[idx]
+
+        # Load NIfTI files
+        image = nib.load(image_path).get_fdata()
+        mask = nib.load(mask_path).get_fdata()
+
+        # Normalize image and ensure mask is binary
+        image = (image - np.min(image)) / (np.max(image) - np.min(image))
+        mask = (mask > 0).astype(np.float32)
+
+        # Apply cropping if crop_size is specified
+        if self.crop_size is not None:
+            image = self.crop_center(image, self.crop_size)
+            mask = self.crop_center(mask, self.crop_size)
+
+        # Convert to tensors and add channel dimension
+        image = torch.tensor(image, dtype=torch.float32).unsqueeze(0)  # Shape: (1, D, H, W)
+        mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0)    # Shape: (1, D, H, W)
+
+        return image, mask
+root_dir = '/content/drive/MyDrive/Algoritmi_An_III/gztraining/'  # Path to the root directory containing subdirectories
+crop_size = (128, 128, 128)  # Depth, Height, Width
+learning_rate = 0.1
+num_epochs = 2
+print("Inainte de initializare")
+# Initialize the dataset
+dataset = Nii3DDataset(root_dir=root_dir, crop_size=crop_size)
+
+# Prepare DataLoader
+batch_size = 1
+dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+# Example: Iterate through the DataLoader
+for images, masks in dataloader:
+    print(f"Image shape: {images.shape}, Mask shape: {masks.shape}")
+
+
+# Initialize dataset with cropping
+#dataset = Nii3DDataset(image_dir, mask_dir, crop_size=crop_size)
+dataset = Nii3DDataset(root_dir='/content/drive/MyDrive/Algoritmi_An_III/gztraining/', crop_size=(128, 128, 128), transform=None)
+# Prepare DataLoader
+dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+# Initialize model, loss function, and optimizer
+model = UNet3D_Optimized()
+criterion = nn.BCELoss()
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+# Training function
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
+print("Linia 146")
+for epoch in range(num_epochs):
+    model.train()
+    print("Linia 149")
+    epoch_loss = 0
+    for images, masks in dataloader:
+        images, masks = images.to(device), masks.to(device)
+        ##print("Linia 153")
+        # Forward pass
+        outputs = model(images)
+        loss = criterion(outputs, masks)
+        print("Linia 157")
+        # Backward pass and optimization
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        print("Linia 162")
+        epoch_loss += loss.item()
+        pass
+    pass
+    print(f"Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss/len(dataloader):.4f}")
+
+print("Training complete.")
+torch.save(model.state_dict(), 'trained_3d_unet_optimized.pth')
+print("Model saved as 'trained_3d_unet_optimized.pth'")
+
+# Load the saved model
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import nibabel as nib
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+import matplotlib.pyplot as plt
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = UNet3D_Optimized()
+model.load_state_dict(torch.load('/content/trained_3d_unet_optimized.pth', map_location=device,weights_only=True))
+model.to(device)
+model.eval()  # Set the model to evaluation mode
+
+# Define a dataset class for testing images
+class Nii3DDataset(Dataset):
+    def __init__(self, image_dir, transform=None):
+        self.image_dir = test_image_dir
+        self.transform = transform
+        self.images = [f for f in os.listdir(self.image_dir) if f.endswith('.nii')]
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        image_path = os.path.join(self.image_dir, self.images[idx])
+        image = nib.load(image_path).get_fdata()
+        # Normalize the image
+        image = (image - np.min(image)) / (np.max(image) - np.min(image))
+
+        # Convert to tensor and add channel dimension
+        image = torch.tensor(image, dtype=torch.float32).unsqueeze(0)  # Shape: (1, D, H, W)
+        return image, self.images[idx]
+
+# Load test images
+test_image_dir = '/content/drive/MyDrive/Algoritmi_An_III/gztest/image/'  # Replace with your test image directory path
+test_dataset = Nii3DDataset(test_image_dir)
+test_loader = DataLoader(test_dataset, batch_size=2, shuffle=False)
+
+# Ensure output directory exists
+os.makedirs('/content/predictions/', exist_ok=True)
+
+# Run inference on test images
+print(f"Test image directory: {test_image_dir}")
+print(f"Files in directory: {os.listdir(test_image_dir)}")
+
+test_dataset = Nii3DDataset(test_image_dir)
+print(f"Number of images in dataset: {len(test_dataset)}")
+
+test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+print(f"DataLoader created: {test_loader}")
+for image, filename in test_loader:
+    print("Processing ")
+    image = image[:,:, :364, :, :]  # Slicing to reduce the depth to 364
+    print(image.shape)
+    image = image.to(device)
+    print("Processing 1")
+    with torch.no_grad():
+        prediction = model(image).cpu().squeeze().numpy()
+    print("Processing 2")
+    # Save and visualize results
+    plt.figure(figsize=(10, 5))
+    plt.subplot(1, 2, 1)
+    plt.title("Input Image")
+    print("Processing 3")
+    plt.imshow(image.cpu().squeeze()[image.shape[2] // 2], cmap='gray')  # Mid-slice of input
+    print("Processing 4")
+    plt.subplot(1, 2, 2)
+    #plt.title("Predicted Mask")
+    #plt.imshow(prediction[prediction.shape[0] // 2], cmap='gray')  # Mid-slice of prediction
+    # Plot all slices of the predicted mask
+    plt.figure(figsize=(15, 15))  # Adjust the figure size as needed
+    num_slices = prediction.shape[0]  # Number of slices (depth)
+
+    for i in range(num_slices):
+        plt.imshow(prediction[i, :, :], cmap='gray')
+        plt.axis('off')
+        plt.title(f"Slice {i}")
+        plt.savefig(f'prediction_slice_{i}.png')  # Save each slice as a PNG file
+        plt.close()  # Close the plot to save memory
+
+    plt.tight_layout()
+    plt.show()
+    print("Processing 5")
+    #plt.show()
+    print("Processing 6")
+
+    # Save the prediction as a NIfTI file
+    output_nifti = nib.Nifti1Image(prediction, affine=np.eye(4))
+    print("Processing 7")
+    nib.save(output_nifti, f'/content/predictions/{filename[0]}_prediction.nii.gz')
+    print("Processing Done")
