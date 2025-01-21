@@ -112,7 +112,7 @@ class Nii3DDataset(Dataset):
         mask = torch.tensor(mask, dtype=torch.float32).unsqueeze(0)    # Shape: (1, D, H, W)
 
         return image, mask
-root_dir = '/content/drive/MyDrive/Algoritmi_An_III/gztraining/'  # Path to the root directory containing subdirectories
+root_dir = '/content/drive/MyDrive/training/'  # Path to the root directory containing subdirectories
 crop_size = (128, 128, 128)  # Depth, Height, Width
 learning_rate = 0.1
 num_epochs = 2
@@ -170,6 +170,7 @@ print("Training complete.")
 torch.save(model.state_dict(), 'trained_3d_unet_optimized.pth')
 print("Model saved as 'trained_3d_unet_optimized.pth'")
 
+
 # Load the saved model
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -179,6 +180,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = UNet3D_Optimized()
@@ -186,6 +188,8 @@ model.load_state_dict(torch.load('/content/trained_3d_unet_optimized.pth', map_l
 model.to(device)
 model.eval()  # Set the model to evaluation mode
 
+
+# Attach the update function to the slider
 # Define a dataset class for testing images
 class Nii3DDataset(Dataset):
     def __init__(self, image_dir, transform=None):
@@ -223,44 +227,32 @@ print(f"Number of images in dataset: {len(test_dataset)}")
 
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 print(f"DataLoader created: {test_loader}")
+from ipywidgets import interact, IntSlider
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Loop-ul pentru test_loader
 for image, filename in test_loader:
-    print("Processing ")
-    image = image[:,:, :364, :, :]  # Slicing to reduce the depth to 364
+    print("Processing")
+    image = image[:, :, :364, :, :]  # Slicing to reduce the depth to 364
     print(image.shape)
     image = image.to(device)
     print("Processing 1")
     with torch.no_grad():
-        prediction = model(image).cpu().squeeze().numpy()
+        prediction = model(image).cpu().squeeze().numpy()  # Shape: (D, H, W)
     print("Processing 2")
-    # Save and visualize results
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.title("Input Image")
-    print("Processing 3")
-    plt.imshow(image.cpu().squeeze()[image.shape[2] // 2], cmap='gray')  # Mid-slice of input
-    print("Processing 4")
-    plt.subplot(1, 2, 2)
-    #plt.title("Predicted Mask")
-    #plt.imshow(prediction[prediction.shape[0] // 2], cmap='gray')  # Mid-slice of prediction
-    # Plot all slices of the predicted mask
-    plt.figure(figsize=(15, 15))  # Adjust the figure size as needed
-    num_slices = prediction.shape[0]  # Number of slices (depth)
 
-    for i in range(num_slices):
-        plt.imshow(prediction[i, :, :], cmap='gray')
+    # Funcția pentru afișarea unui slice specific
+    def plot_slice(slice_idx):
+        plt.figure(figsize=(6, 6))
+        plt.imshow(prediction[slice_idx, :, :], cmap='gray')
+        plt.title(f"Predicted Mask - Slice {slice_idx}")
         plt.axis('off')
-        plt.title(f"Slice {i}")
-        plt.savefig(f'prediction_slice_{i}.png')  # Save each slice as a PNG file
-        plt.close()  # Close the plot to save memory
+        plt.show()
 
-    plt.tight_layout()
-    plt.show()
-    print("Processing 5")
-    #plt.show()
-    print("Processing 6")
+    # Slider interactiv pentru selecția unui slice
+    interact(plot_slice, slice_idx=IntSlider(min=0, max=prediction.shape[0]-1, step=1, value=0))
+    print("Done")
 
-    # Save the prediction as a NIfTI file
-    output_nifti = nib.Nifti1Image(prediction, affine=np.eye(4))
-    print("Processing 7")
-    nib.save(output_nifti, f'/content/predictions/{filename[0]}_prediction.nii.gz')
     print("Processing Done")
+
